@@ -1,0 +1,26 @@
+# Virtual environment
+venv/
+.venv/
+
+# Dataset (download separately, see data/README.md)
+data/raw/*
+!data/raw/.gitkeep
+
+# Trained model artifacts
+models/*.joblib
+
+# Generated results
+results/*.png
+results/*.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
