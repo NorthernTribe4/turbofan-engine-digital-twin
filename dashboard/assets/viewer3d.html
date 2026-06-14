@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Turbofan 3D Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+    #mount { position: relative; width: 100%; height: 100%; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="mount"></div>
+  <script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+const mount = document.getElementById('mount');
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+mount.appendChild(renderer.domElement);
+
+// ── Scene & Camera ────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+camera.position.set(3.5, 1.8, 4.5);
+camera.lookAt(0, 0, 0);
+
+function resize() {
+  const w = mount.clientWidth  || 600;
+  const h = mount.clientHeight || 340;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping   = true;
+controls.dampingFactor   = 0.06;
+controls.autoRotate      = true;
+controls.autoRotateSpeed = 0.8;
+controls.enablePan       = false;
+controls.minDistance     = 2.5;
+controls.maxDistance     = 12;
+controls.maxPolarAngle   = Math.PI * 0.78;
+
+// ── Lighting ──────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x304050, 3.0));
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+keyLight.position.set(4, 5, 6);
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0x6688aa, 0.8);
+fillLight.position.set(-4, -2, -4);
+scene.add(fillLight);
+
+const rimLight = new THREE.PointLight(0x2244ff, 1.2, 14);
+rimLight.position.set(-4, 3, 0);
+scene.add(rimLight);
+
+// ── Shared material factories ─────────────────────────────────────────────────
+const metalMat = () => new THREE.MeshStandardMaterial({
+  color: 0x8899aa, metalness: 0.85, roughness: 0.25,
+});
+const darkMat = () => new THREE.MeshStandardMaterial({
+  color: 0x223344, metalness: 0.9, roughness: 0.2,
+});
+
+// ── Health colour state ───────────────────────────────────────────────────────
+// All health-sensitive parts share materials pushed into this array.
+const healthMaterials = [];
+
+const SCHEMES = {
+  ok:      { color: 0x2e7d32, emissive: 0x0a1a0a, intensity: 0.15 },
+  warning: { color: 0xf9a825, emissive: 0x3d2800, intensity: 0.35 },
+  critical:{ color: 0xc62828, emissive: 0x3d0000, intensity: 0.55 },
+  warmup:  { color: 0x455a64, emissive: 0x111820, intensity: 0.08 },
+};
+
+function applyScheme(s) {
+  healthMaterials.forEach(m => {
+    m.color.setHex(s.color);
+    m.emissive.setHex(s.emissive);
+    m.emissiveIntensity = s.intensity;
+  });
+}
+
+function applyHealth(rul, maxRul) {
+  if (rul === null || rul === undefined || isNaN(rul)) {
+    applyScheme(SCHEMES.warmup);
+    return;
+  }
+  const pct = rul / maxRul;
+  if      (pct > 0.50) applyScheme(SCHEMES.ok);
+  else if (pct > 0.25) applyScheme(SCHEMES.warning);
+  else                  applyScheme(SCHEMES.critical);
+}
+
+function healthMat() {
+  const m = new THREE.MeshStandardMaterial({
+    color: 0x455a64, emissive: 0x111820,
+    emissiveIntensity: 0.08,
+    metalness: 0.55, roughness: 0.45,
+  });
+  healthMaterials.push(m);
+  return m;
+}
+
+// ── Engine geometry ───────────────────────────────────────────────────────────
+// Engine axis: Z  (−Z = inlet / front,  +Z = exhaust / rear)
+// Three.js CylinderGeometry has its axis along Y by default.
+// rotation.x = π/2 maps Y → Z, so cylinder axis becomes Z. ✓
+
+// 1. Outer nacelle shell (open-ended, semi-transparent)
+//    radiusTop(+Z exhaust) = 0.62, radiusBottom(−Z inlet) = 0.78
+{
+  const geo = new THREE.CylinderGeometry(0.62, 0.78, 5.2, 48, 1, true);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x1e2a35, metalness: 0.7, roughness: 0.5,
+    transparent: true, opacity: 0.50, side: THREE.DoubleSide,
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.rotation.x = Math.PI / 2;
+  scene.add(m);
+}
+
+// 2. Inlet lip ring at z = −2.55
+{
+  const m = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.055, 12, 48), metalMat());
+  m.rotation.x = Math.PI / 2;
+  m.position.z = -2.55;
+  scene.add(m);
+}
+
+// 3. Fan hub disc
+{
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.14, 24), darkMat());
+  m.rotation.x = Math.PI / 2;
+  m.position.z = -2.0;
+  scene.add(m);
+}
+
+// 4. Fan blades – 18 blades, spin in XY plane around Z axis
+const fanGroup = new THREE.Group();
+fanGroup.position.z = -2.0;
+for (let i = 0; i < 18; i++) {
+  const geo = new THREE.BoxGeometry(0.055, 0.60, 0.042);
+  geo.translate(0, 0.32, 0);   // shift blade outward from hub centre
+  const blade = new THREE.Mesh(geo, metalMat());
+  blade.rotation.z = 0.18;     // aerodynamic pitch angle
+  const pivot = new THREE.Group();
+  pivot.add(blade);
+  pivot.rotation.z = (i / 18) * Math.PI * 2;
+  fanGroup.add(pivot);
+}
+scene.add(fanGroup);
+
+// 5. Compressor stages (5 discs, radius shrinks toward exhaust)
+const compDefs = [
+  { z: -1.40, r: 0.72 },
+  { z: -0.90, r: 0.68 },
+  { z: -0.40, r: 0.63 },
+  { z:  0.10, r: 0.59 },
+  { z:  0.55, r: 0.56 },
+];
+compDefs.forEach(({ z, r }) => {
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.11, 36), healthMat());
+  disc.rotation.x = Math.PI / 2;
+  disc.position.z  = z;
+  scene.add(disc);
+
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(r, 0.024, 8, 36), darkMat());
+  rim.rotation.x = Math.PI / 2;
+  rim.position.z  = z;
+  scene.add(rim);
+});
+
+// 6. Combustion chamber
+{
+  const mat = healthMat();
+  mat.roughness = 0.60;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.55, 36), mat);
+  m.rotation.x = Math.PI / 2;
+  m.position.z = 1.05;
+  scene.add(m);
+
+  [-0.22, 0.22].forEach(dz => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.65, 0.03, 8, 36), darkMat());
+    ring.rotation.x = Math.PI / 2;
+    ring.position.z = 1.05 + dz;
+    scene.add(ring);
+  });
+}
+
+// 7. Turbine stages (3 discs with blade stubs)
+const turbDefs = [
+  { z: 1.48, r: 0.60, blades: 12 },
+  { z: 1.78, r: 0.56, blades: 10 },
+  { z: 2.08, r: 0.52, blades:  8 },
+];
+turbDefs.forEach(({ z, r, blades }) => {
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.09, 36), healthMat());
+  disc.rotation.x = Math.PI / 2;
+  disc.position.z  = z;
+  scene.add(disc);
+
+  for (let b = 0; b < blades; b++) {
+    const angle = (b / blades) * Math.PI * 2;
+    const geo   = new THREE.BoxGeometry(0.034, 0.11, 0.052);
+    const stub  = new THREE.Mesh(geo, metalMat());
+    stub.position.set(
+      Math.cos(angle) * (r + 0.055),
+      Math.sin(angle) * (r + 0.055),
+      z
+    );
+    stub.rotation.z = angle + Math.PI / 2;
+    scene.add(stub);
+  }
+});
+
+// 8. Exhaust nozzle (converging)
+//    radiusTop(+Z) = 0.30, radiusBottom(−Z) = 0.52 → tapers inward
+{
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.52, 0.75, 32), darkMat());
+  m.rotation.x = Math.PI / 2;
+  m.position.z = 2.52;
+  scene.add(m);
+}
+
+// 9. Exhaust plume cone (decorative glow)
+//    ConeGeometry tip at +Y → after rotation.x=π/2 tip points +Z (exhaust direction)
+{
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff6a00, emissive: 0xdd3300,
+    emissiveIntensity: 0.55, transparent: true, opacity: 0.65,
+  });
+  const m = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.60, 24), mat);
+  m.rotation.x = Math.PI / 2;
+  m.position.z = 3.20;   // base near z=2.90, tip at z=3.50
+  scene.add(m);
+}
+
+// Initialise to warming-up colour
+applyScheme(SCHEMES.warmup);
+
+// ── Status label ──────────────────────────────────────────────────────────────
+const label = document.createElement('div');
+Object.assign(label.style, {
+  position: 'absolute', bottom: '12px', left: '0', right: '0',
+  textAlign: 'center', color: '#9aa7b4',
+  fontFamily: "'Segoe UI', Arial, sans-serif", fontSize: '12px',
+  letterSpacing: '0.6px', pointerEvents: 'none',
+  textShadow: '0 1px 3px rgba(0,0,0,0.85)',
+});
+label.textContent = 'Engine · warming up';
+mount.appendChild(label);
+
+// ── postMessage handler ───────────────────────────────────────────────────────
+window.addEventListener('message', (event) => {
+  const d = event.data;
+  if (!d || d.type !== 'healthUpdate') return;
+  const rul = (d.rul !== null && d.rul !== undefined) ? Number(d.rul) : null;
+  applyHealth(rul, d.maxRul || 125);
+  const rulStr = (rul === null || isNaN(rul)) ? '—' : Math.round(rul);
+  label.textContent = `${d.label || 'Engine'} · RUL: ${rulStr} cycles`;
+});
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  fanGroup.rotation.z += 0.055;   // fan spin
+  renderer.render(scene, camera);
+}
+animate();
+  </script>
+</body>
+</html>

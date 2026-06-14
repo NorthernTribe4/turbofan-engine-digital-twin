@@ -118,6 +118,22 @@ app.layout = html.Div(
             ],
         ),
         html.Div(
+            style={
+                "marginTop": "20px",
+                "background": "#1e2630",
+                "borderRadius": "10px",
+                "overflow": "hidden",
+                "boxShadow": "0 1px 3px rgba(0,0,0,0.4)",
+            },
+            children=[
+                html.Iframe(
+                    id="engine-3d-viewer",
+                    src="/assets/viewer3d.html",
+                    style={"width": "100%", "height": "340px", "border": "none", "display": "block"},
+                )
+            ],
+        ),
+        html.Div(
             style={"display": "flex", "marginTop": "20px"},
             children=[
                 kpi_card("HEALTH INDEX", "kpi-health"),
@@ -136,6 +152,7 @@ app.layout = html.Div(
         dcc.Interval(id="tick", interval=TICK_MS, n_intervals=0),
         dcc.Store(id="unit-store", data=UNITS[0]),
         dcc.Store(id="step-store", data=0),
+        html.Div(id="_viewer-dummy", style={"display": "none"}),
     ],
 )
 
@@ -263,6 +280,27 @@ def rul_figure(tl, step):
         legend=dict(orientation="h", y=-0.2),
     )
     return fig
+
+
+app.clientside_callback(
+    """
+    function(rul_text, engine_unit) {
+        var iframe = document.getElementById('engine-3d-viewer');
+        if (!iframe || !iframe.contentWindow) { return ''; }
+        var rul = parseFloat(rul_text);
+        iframe.contentWindow.postMessage({
+            type: 'healthUpdate',
+            rul: isNaN(rul) ? null : rul,
+            maxRul: 125,
+            label: 'Engine ' + engine_unit
+        }, '*');
+        return '';
+    }
+    """,
+    Output("_viewer-dummy", "children"),
+    Input("kpi-rul", "children"),
+    Input("engine-select", "value"),
+)
 
 
 if __name__ == "__main__":
